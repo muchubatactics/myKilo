@@ -7,13 +7,17 @@
 #include <stdio.h>
 #include <errno.h>
 #include <sys/ioctl.h>
+#include <string.h>
 
 /*** defines ***/
+#define KILO_VERSION "0.0.1"
+
 #define CTRL_KEY(k) ((k) & 0x1f)
 
 /***data***/
 struct editorConfig
 {
+    int cx, cy;
     int screenrows;
     int screencols;
     struct termios orig_termios;
@@ -50,7 +54,7 @@ void enableRawMode()
     raw.c_lflag &= ~(ECHO | ICANON | ISIG | IEXTEN);
     raw.c_cflag |= (CS8);
     raw.c_cc[VMIN] = 0; //minimum characters before read return
-    raw.c_cc[VTIME] = 10; //time after which read returns if no input
+    raw.c_cc[VTIME] = 1; //time after which read returns if no input
 
     if(tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) die("tcsetattr");
 }
@@ -61,12 +65,31 @@ char editorReadKey()
     char c;
     while((nread = read(STDIN_FILENO, &c, 1) != 1))
     {
-        if(nread == -1 && errno != EAGAIN)
-        {
-            die("read");
-        }
+        if(nread == -1 && errno != EAGAIN) die("read");
     }
-    return c;
+    if(c == '\x1b')
+    {
+        char seq[3];
+
+        if(read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b';
+        if(read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
+
+        if(seq[0] == '[')
+        {
+            switch (seq[1])
+            {
+            case 'A': return 'w'; 
+            case 'B': return 's';
+            case 'C': return 'd';
+            case 'D': return 'a'; 
+            }
+        }
+        return '\x1b';
+    }
+    else
+    {
+        return c;
+    }
 }
 
 int getCursorPosition(int *rows, int *cols)
@@ -110,32 +133,108 @@ int getWindowSize(int *rows, int *cols)
 }
 
 
+/*** append buffer ***/
+struct abuf
+{
+    char *b;
+    int len;
+};
+
+#define ABUF_INIT {NULL, 0}
+
+void abAppend(struct abuf *ab, const char *s, int len )
+{
+    char *new = realloc(ab->b, ab->len + len);
+    
+    if(!new) return;
+
+    memcpy(&new[ab->len], s, len);
+    ab->b = new;
+    ab->len += len;
+}
+
+void abFree(struct abuf *ab)
+{
+    free(ab->b);
+}
+
+
 /*** output ***/
 
-void editorDrawRows()
+void editorDrawRows(struct abuf *ab)
 {
     int y;
     for(y = 0; y < E.screenrows; ++y)
     {
-        write(STDOUT_FILENO, "~", 1);
+        if(y == E.screenrows / 3)
+        {
+            char welcome[80];
+            int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo Editor -- version %s", KILO_VERSION);
+            if(welcomelen > E.screencols) welcomelen = E.screencols;
+            
+            int padding = (E.screencols - welcomelen) / 2;
+            if(padding)
+            {
+                abAppend(ab, "~", 1);
+                --padding;
+            }
 
+            while(padding--) abAppend(ab, " ", 1);
+
+            abAppend(ab, welcome, welcomelen);
+        }
+        else
+        {
+            abAppend(ab, "~", 1);
+        }
+
+        abAppend(ab, "\x1b[K", 3);
         if(y < E.screenrows - 1)
         {
-            write(STDOUT_FILENO, "\r\n", 2);
+            abAppend(ab, "\r\n", 2);
         }
     }
 }
 
 void editorRefreshScreen()
 {
-    write(STDOUT_FILENO, "\x1b[2J", 4);
-    write(STDOUT_FILENO, "\x1b[H", 3); 
+    struct abuf ab = ABUF_INIT;
 
-    editorDrawRows();
-    write(STDOUT_FILENO, "\x1b[H", 3);
+    abAppend(&ab, "\x1b[?25l", 6);
+    abAppend(&ab, "\x1b[H", 3); 
+
+    editorDrawRows(&ab);
+
+    char buf[32];
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+    abAppend(&ab, buf, strlen(buf));
+
+    abAppend(&ab, "\x1b[?25h", 6);
+
+    write(STDOUT_FILENO, ab.b, ab.len);
+    abFree(&ab);
 }
 
 /*** input ***/
+
+void editorMoveCursor(char key)
+{
+    switch (key)
+    {
+    case 'w':
+        --E.cy;
+        break;
+    case 'a':
+        --E.cx;
+        break;
+    case 's':
+        ++E.cy;
+        break;
+    case 'd':
+        ++E.cx;
+        break;
+    }
+}
 
 void editorProcessKeyPress()
 {
@@ -148,6 +247,13 @@ void editorProcessKeyPress()
             write(STDOUT_FILENO, "\x1b[H", 3); 
             exit(0);
             break;
+
+        case 'w':
+        case 'a':
+        case 's':
+        case 'd':
+            editorMoveCursor(c);
+            break;
     }
 }
 
@@ -155,10 +261,10 @@ void editorProcessKeyPress()
 
 void initEditor()
 {
-    if(getWindowSize(&E.screenrows, &E.screencols) == -1)
-    {
-        die("getWindowsSize");
-    }
+    E.cx = 0;
+    E.cy = 0;
+
+    if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowsSize");
 }
 
 int main()
