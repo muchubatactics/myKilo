@@ -25,6 +25,16 @@ struct editorConfig
 
 struct editorConfig E;
 
+enum editorKey
+{
+    ARROW_LEFT = 1000,
+    ARROW_RIGHT,
+    ARROW_UP,
+    ARROW_DOWN,
+    PAGE_DOWN,
+    PAGE_UP
+};
+
 /***terminal***/
 void die(const char* s)
 {
@@ -54,12 +64,12 @@ void enableRawMode()
     raw.c_lflag &= ~(ECHO | ICANON | ISIG | IEXTEN);
     raw.c_cflag |= (CS8);
     raw.c_cc[VMIN] = 0; //minimum characters before read return
-    raw.c_cc[VTIME] = 1; //time after which read returns if no input
+    raw.c_cc[VTIME] = 100; //time after which read returns if no input
 
     if(tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) die("tcsetattr");
 }
 
-char editorReadKey()
+int editorReadKey()
 {
     int nread;
     char c;
@@ -76,12 +86,30 @@ char editorReadKey()
 
         if(seq[0] == '[')
         {
-            switch (seq[1])
+            if(seq[1] >= '0' && seq[1] <= '9')
             {
-            case 'A': return 'w'; 
-            case 'B': return 's';
-            case 'C': return 'd';
-            case 'D': return 'a'; 
+                if(read(STDIN_FILENO, &seq[2], 1) != 1) return '\x1b';
+                if(seq[2] == '~')
+                {
+                    switch (seq[1])
+                    {
+                    case '5':
+                        return PAGE_UP;
+                    case '6':
+                        return PAGE_DOWN;
+                    }
+                }
+
+            }
+            else
+            {
+                switch (seq[1])
+                {
+                case 'A': return ARROW_UP; 
+                case 'B': return ARROW_DOWN;
+                case 'C': return ARROW_RIGHT;
+                case 'D': return ARROW_LEFT; 
+                }
             }
         }
         return '\x1b';
@@ -217,28 +245,28 @@ void editorRefreshScreen()
 
 /*** input ***/
 
-void editorMoveCursor(char key)
+void editorMoveCursor(int key)
 {
     switch (key)
     {
-    case 'w':
-        --E.cy;
+    case ARROW_UP:
+        if(E.cy != 0) --E.cy;
         break;
-    case 'a':
-        --E.cx;
+    case ARROW_LEFT:
+        if(E.cx != 0) --E.cx;
         break;
-    case 's':
-        ++E.cy;
+    case ARROW_DOWN:
+        if(E.cy != E.screenrows - 1) ++E.cy;
         break;
-    case 'd':
-        ++E.cx;
+    case ARROW_RIGHT:
+        if(E.cx != E.screencols - 1) ++E.cx;
         break;
     }
 }
 
 void editorProcessKeyPress()
 {
-    char c = editorReadKey();
+    int c = editorReadKey();
 
     switch (c)
     {
@@ -248,10 +276,10 @@ void editorProcessKeyPress()
             exit(0);
             break;
 
-        case 'w':
-        case 'a':
-        case 's':
-        case 'd':
+        case ARROW_UP:
+        case ARROW_LEFT:
+        case ARROW_DOWN:
+        case ARROW_RIGHT:
             editorMoveCursor(c);
             break;
     }
