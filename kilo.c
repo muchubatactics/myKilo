@@ -45,6 +45,7 @@ struct editorConfig
     char statusmsg[80];
     time_t statusmsg_time;
     struct termios orig_termios;
+    int dirty;
 };
 
 struct editorConfig E;
@@ -62,6 +63,9 @@ enum editorKey
     END_KEY,
     DEL_KEY
 };
+
+/**** prototypes ****/
+void editorSetStatusMessage(const char *fmt, ...);
 
 /***terminal***/
 void die(const char* s)
@@ -266,6 +270,7 @@ void editorAppendRow(char *s, size_t len)
     editorUpdateRow(&E.row[at]);
 
     ++E.numrows;
+    ++E.dirty;
 
 }
 
@@ -277,6 +282,7 @@ void editorRowInsertChar(erow *row, int at, int c)
     ++row->size;
     row->chars[at] = c;
     editorUpdateRow(row);
+    ++E.dirty;
 }
 
 /**** editor operations ****/
@@ -342,9 +348,36 @@ void editorOpen(char *filename)
 
     free(line);
     fclose(fp);
+    E.dirty = 0;
 
 }
 
+void editorSave()
+{
+    if (E.filename == NULL) return;
+
+    int len;
+    char *buf = editorRowToString(&len);
+
+    int fd = open(E.filename, O_RDWR | O_CREAT, 0644);
+    if (fd != -1)
+    {
+        if (ftruncate(fd, len) != -1)
+        {
+            if (write(fd, buf, len) == len)
+            {
+                close(fd);
+                free(buf);
+                E.dirty = 0;
+                editorSetStatusMessage("%d bytes written to disk", len);
+                return;
+            }
+        }
+        close(fd);
+    }
+    free(buf); 
+    editorSetStatusMessage("Can't save! I/O error: %s", strerror(errno));
+}
 
 /*** append buffer ***/
 struct abuf
@@ -401,11 +434,13 @@ void editorDrawStatusBar(struct abuf *ab)
 {
     abAppend(ab, "\x1b[7m", 4);
     char status[80], rstatus[80];
-    int len = snprintf(status, sizeof(status), "%.20s - %d lines", E.filename ? E.filename : "[No Name]", E.numrows);
-    if (len > E.screencols) len = E.screencols;
-    abAppend(ab, status, len);
+
+    int len = snprintf(status, sizeof(status), "%.20s - %d lines %s", E.filename ? E.filename : "[No Name]", E.numrows, E.dirty ? "(modified)" : "");
 
     int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.numrows);
+
+    if (len > E.screencols) len = E.screencols;
+    abAppend(ab, status, len);
 
     while(len < E.screencols)
     {
@@ -571,6 +606,10 @@ void editorProcessKeyPress()
             exit(0);
             break;
 
+        case CTRL_KEY('s'):
+            editorSave();
+            break;
+
         case HOME_KEY:
             E.cx = 0;
             break;
@@ -615,7 +654,7 @@ void editorProcessKeyPress()
             break;
 
         case CTRL_KEY('l'):
-        case "\x1b":
+        case '\x1b':
             break;
 
         default:
@@ -638,6 +677,7 @@ void initEditor()
     E.filename = NULL;
     E.statusmsg[0] = '\0';
     E.statusmsg_time = 0;
+    E.dirty = 0;
 
     if(getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowsSize");
     E.screenrows -= 2;
@@ -652,7 +692,7 @@ int main(int argc, char **argv)
         editorOpen(argv[1]);
     }
 
-    editorSetStatusMessage("HELP: CTRL-Q = QUIT");
+    editorSetStatusMessage("HELP: CTRL_S = save | CTRL-Q = QUIT");
 
     while(1)
     {
@@ -662,4 +702,4 @@ int main(int argc, char **argv)
     return 0;
 }
 
-/*start from save to disk*/
+/*start from quit confirmation*/
