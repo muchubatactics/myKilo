@@ -941,5 +941,4 @@ int main(int argc, char **argv)
     return 0;
 }
 
-/*start from incremental search*/
-/* revise how E.rowoff works */
+/*start from syntax highlighting*/
